@@ -831,10 +831,15 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
         execute(ObjectUtil.checkNotNull(task, "task"), false);
     }
 
+    // 程序初始化的时候不会执行，等第一次添加任务才会执行
     private void execute(Runnable task, boolean immediate) {
+        // 判断是否在eventLoop线程中
         boolean inEventLoop = inEventLoop();
+        // 添加任务，主要往taskQueue添加任务，若添加失败会运行相关拒绝策略
         addTask(task);
+        // 如果不在eventLoop中
         if (!inEventLoop) {
+            // 判断reactor线程有没有启动，没有启动则会启动
             startThread();
             if (isShutdown()) {
                 boolean reject = false;
@@ -854,6 +859,7 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
         }
 
         if (!addTaskWakesUp && immediate) {
+            // 外部线程添加任务的时候会通过wakeup唤醒selector，使得selector能够及时处理任务
             wakeup(inEventLoop);
         }
     }
@@ -948,13 +954,17 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
     private static final long SCHEDULE_PURGE_INTERVAL = TimeUnit.SECONDS.toNanos(1);
 
     private void startThread() {
+        // 判断是否启动
         if (state == ST_NOT_STARTED) {
+            // CAS设置启动状态
             if (STATE_UPDATER.compareAndSet(this, ST_NOT_STARTED, ST_STARTED)) {
                 boolean success = false;
                 try {
+                    // 启动reactor线程
                     doStartThread();
                     success = true;
                 } finally {
+                    // 如果不成功则设置为未启动状态
                     if (!success) {
                         STATE_UPDATER.compareAndSet(this, ST_STARTED, ST_NOT_STARTED);
                     }
@@ -983,17 +993,23 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
 
     private void doStartThread() {
         assert thread == null;
+        // 调用内部执行器executor将EventLoop的run方法提交到线程池中处理
+        // 该线程就是executor创建，对应netty的reactor线程实体。executor 默认是ThreadPerTaskExecutor
+        // 而ThreadPerTaskExecutor的executor会通过DefaultThreadFactory创建一个FastThreadLocalThread线程，这个线程就是netty的reactor线程
         executor.execute(new Runnable() {
             @Override
             public void run() {
                 thread = Thread.currentThread();
+                // 如果reactor线程中断了则中断当前线程
                 if (interrupted) {
                     thread.interrupt();
                 }
 
                 boolean success = false;
+                // 更新上次执行的时间
                 updateLastExecutionTime();
                 try {
+                    // EventLoop run方法，运行taskQueue任务
                     SingleThreadEventExecutor.this.run();
                     success = true;
                 } catch (Throwable t) {
